@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Clay Card</title>
+<meta name="description" content="Squad scorecard for English Sporting">
+<meta name="theme-color" content="#e0631e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Clay Card">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><span class="dot" aria-hidden="true"></span>Clay Card</a>
+  <nav>
+    <a href="#/" data-nav="cards">Cards</a>
+    <a href="#/club" data-nav="club">Club</a>
+    <a href="#/settings" data-nav="settings" aria-label="Settings">⚙︎</a>
+  </nav>
+</header>
+<main id="view" tabindex="-1"></main>
+<div id="toast" role="status" aria-live="polite"></div>
+<noscript><p class="pad">Clay Card needs JavaScript turned on.</p></noscript>
+<script type="module" src="src/app.js"></script>
+</body>
+</html>
