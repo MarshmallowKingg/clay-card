@@ -2,8 +2,12 @@
 
 A squad scorecard for English Sporting. One phone scores up to 15 shooters, and each card is sent to a club Google Sheet, which combines every squad into one leaderboard.
 
+- Club layouts are built in: **5 stands × 10**, or **6 stands of 8 with one stand of 10** (you choose which stand has 10). Custom layouts are also available.
 - Tap a box to cycle it: ✕ kill → ○ lost → clear. **Rest killed** fills the rest of a stand.
-- The first shooter rotates to the back on each stand (this can be switched off).
+- Rotation: whoever shoots last on a stand shoots first on the next (this can be switched off).
+- Membership numbers are recorded for each shooter. Guests can be added without one.
+- **Check-in**: the club marks who has arrived for a shoot. Scorers then build their squads from that list.
+- **History**: each shooter's average, last 5, best score and trend, with a chart. Members are tracked by membership number, so a change of name doesn't split their record.
 - Stand-by-stand totals, and a leaderboard with countback (last stand first, then working backwards).
 - Results can be shared as WhatsApp text, a CSV file or a JSON backup.
 - **Submit to club** sends the card to the Sheet. With no signal, the card waits on the phone and sends when signal returns. Re-submitting a card replaces its earlier rows.

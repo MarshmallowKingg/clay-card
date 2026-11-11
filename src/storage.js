@@ -1,6 +1,6 @@
 // Local persistence. Everything lives on the phone in localStorage; the club Sheet is a copy.
 
-const K = { cards: 'claycard.cards', settings: 'claycard.settings', queue: 'claycard.queue' };
+const K = { cards: 'claycard.cards', settings: 'claycard.settings', queue: 'claycard.queue', cache: 'claycard.cache.' };
 
 function read(key, fallback) {
   try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
@@ -30,6 +30,10 @@ export const store = {
   queue() { return read(K.queue, []); },
   enqueue(id) { const q = this.queue(); if (!q.includes(id)) { q.push(id); write(K.queue, q); } },
   dequeue(id) { write(K.queue, this.queue().filter((x) => x !== id)); },
+
+  // Last copy of club data (members, check-ins, history) so setup still works with no signal.
+  cached(key) { return read(K.cache + key, null); },
+  setCached(key, value) { write(K.cache + key, { at: Date.now(), value }); return value; },
 
   /** Names used on previous cards, most recent first — for quick squad entry. */
   knownNames() {

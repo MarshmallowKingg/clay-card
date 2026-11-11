@@ -8,7 +8,10 @@ import { loadBackend } from './fake-backend.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 5173;
-const backend = loadBackend('1234');
+const backend = loadBackend('1234', [
+  ['1042', 'Lewis Robinson', 'Y'], ['1007', 'Pete Smith', 'Y'], ['1013', 'Hannah Jones', 'Y'],
+  ['1021', 'Gary Wood', 'Y'], ['1033', 'Sam Patel', 'Y'], ['1050', 'Jo Clarke', 'Y'], ['0999', 'Old Timer', 'N'],
+]);
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
 
 http.createServer(async (req, res) => {

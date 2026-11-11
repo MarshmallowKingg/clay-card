@@ -63,6 +63,28 @@ export async function flushQueue() {
   return sent;
 }
 
+/** Club register (active members). Falls back to the last copy on the phone when there's no signal. */
+export async function fetchMembers() {
+  try { return store.setCached('members', (await call('GET', { action: 'members' })).members); }
+  catch (e) { const c = store.cached('members'); if (e.offline && c) return c.value; throw e; }
+}
+
+/** Everyone checked in on a date (all shoots that day). Cached for offline use. */
+export async function fetchCheckins(date) {
+  try { return store.setCached(`checkins.${date}`, (await call('GET', { action: 'checkins', date })).checkins); }
+  catch (e) { const c = store.cached(`checkins.${date}`); if (e.offline && c) return c.value; throw e; }
+}
+
+export async function setCheckin({ date, shoot, memberNo = '', name }, on) {
+  const d = await call('POST', { action: on ? 'checkin' : 'uncheckin', date, shoot, memberNo, name });
+  return store.setCached(`checkins.${date}`, d.checkins);
+}
+
+/** One person's submitted scores from the club Sheet. */
+export async function fetchHistory({ memberNo = '', name = '' }) {
+  return (await call('GET', memberNo ? { action: 'history', memberNo } : { action: 'history', name })).rows;
+}
+
 export const fetchShoots = () => call('GET', { action: 'shoots' }).then((d) => d.shoots);
 export const fetchResults = (shoot, date) => call('GET', { action: 'results', shoot, date }).then((d) => d.rows);
 export const checkPin = () => call('GET', { action: 'ping' });

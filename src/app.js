@@ -3,7 +3,7 @@
 import * as S from './scoring.js';
 import { store } from './storage.js';
 import { CONFIG } from './config.js';
-import { clubEnabled, submitCard, flushQueue, fetchShoots, fetchResults, checkPin } from './api.js';
+import { clubEnabled, submitCard, flushQueue, fetchShoots, fetchResults, checkPin, fetchMembers, fetchCheckins, setCheckin, fetchHistory } from './api.js';
 
 const $view = document.getElementById('view');
 const $toast = document.getElementById('toast');
@@ -55,11 +55,14 @@ function render() {
   const card = r.id ? store.card(r.id) : null;
   if (['setup', 'score', 'results'].includes(r.name) && !card) return go('#/');
   keepAwake(r.name === 'score');
+  document.documentElement.style.setProperty('--hdr', `${document.querySelector('.top').offsetHeight}px`);
   document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === r.name));
-  const views = { cards: viewCards, setup: viewSetup, score: viewScore, results: viewResults, club: viewClub, settings: viewSettings };
+  const views = { cards: viewCards, setup: viewSetup, score: viewScore, results: viewResults, club: viewClub, settings: viewSettings, checkin: viewCheckin, history: viewHistory };
   $view.innerHTML = (views[r.name] || viewCards)(card, r);
   if (r.name === 'club') loadClub();
-  if (r.name === 'setup') loadShootSuggestions();
+  if (r.name === 'setup') { loadShootSuggestions(); loadSetupPeople(card); }
+  if (r.name === 'checkin') loadCheckin();
+  if (r.name === 'history') loadHistory(r.id);
   window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', render);
@@ -92,52 +95,90 @@ function viewCards() {
   </section>`;
 }
 
+const fmtPerson = (p) => (p.memberNo ? `${p.name} · ${p.memberNo}` : p.name);
+/** "Name · 1042" → { name, memberNo } */
+function parsePerson(text) {
+  const m = String(text).trim().match(/^(.*\S)\s+·\s+(\S+)$/);
+  return m ? { name: m[1], memberNo: m[2] } : { name: String(text).trim(), memberNo: '' };
+}
+const onCard = (card, p) => card.shooters.some((s) => S.personKey(s) === S.personKey(p));
+
 function viewSetup(card) {
-  const names = store.knownNames().filter((n) => !card.shooters.some((s) => s.name === n));
-  const uniform = card.stands.every((s) => s.targets === card.stands[0]?.targets);
+  const layout = S.detectLayout(card.stands);
+  const recent = S.people(store.cards()).filter((p) => !onCard(card, p)).slice(0, 12);
   return `<section class="pad setup">
     <h1>Card setup</h1>
     <div class="grid2">
       <label>Date<input type="date" data-field="date" value="${esc(card.date)}"></label>
       <label>Scorer<input data-field="scorer" value="${esc(card.scorer)}" autocomplete="name"></label>
     </div>
-    <label>Shoot<input data-field="shoot" value="${esc(card.shoot)}" list="shoots" placeholder="e.g. Sunday 50 bird"></label>
+    <label>Shoot<input data-field="shoot" value="${esc(card.shoot)}" list="shoots" placeholder="e.g. Sunday 50"></label>
     <datalist id="shoots"></datalist>
     <label>Ground<input data-field="ground" value="${esc(card.ground)}" list="grounds"></label>
     <datalist id="grounds">${store.knownGrounds().map((g) => `<option value="${esc(g)}">`).join('')}</datalist>
 
+    <h2>Layout <span class="muted">${card.stands.length} stands · ${S.targetCount(card)} targets</span></h2>
+    <div class="seg">${S.LAYOUTS.map((l) => `<button class="${layout?.id === l.id ? 'on' : ''}" data-action="layout" data-id="${l.id}">${esc(l.label)}</button>`).join('')}</div>
+    ${layout?.id === '6mixed' ? `<div class="tenat"><span class="muted small">10-bird<br>stand</span>${[1, 2, 3, 4, 5, 6].map((n) => `<button class="chip ${layout.tenAt === n ? 'on' : ''}" data-action="tenat" data-n="${n}">${n}</button>`).join('')}</div>` : ''}
+    <div class="standstrip">${card.stands.map((st) => `<span><b>${st.n}</b>${st.targets}</span>`).join('')}</div>
+    <details ${layout ? '' : 'open'}><summary>Custom layout</summary>
+      <label>Stands<input type="number" min="1" max="30" data-stands="count" value="${card.stands.length}" inputmode="numeric"></label>
+      <div class="perstand">${card.stands.map((st, i) => `<label>S${st.n}<input type="number" min="1" max="30" data-stand="${i}" value="${st.targets}" inputmode="numeric"></label>`).join('')}</div>
+    </details>
+
     <h2>Squad <span class="muted">${card.shooters.length}/${S.MAX_SHOOTERS}</span></h2>
+    ${clubEnabled() ? `<div class="panel" id="checkedin"><p class="muted small">Loading today's check-ins…</p></div>` : ''}
     <ol class="squad">${card.shooters.map((s, i) => `<li>
-      <input data-shooter="${s.id}" value="${esc(s.name)}" aria-label="Shooter ${i + 1}">
+      <input data-shooter="${s.id}" value="${esc(s.name)}" aria-label="Shooter ${i + 1} name">
+      <input class="memno" data-memno="${s.id}" value="${esc(s.memberNo)}" placeholder="No." aria-label="Membership number" inputmode="numeric">
       <button class="icon" data-action="up" data-id="${s.id}" ${i ? '' : 'disabled'} aria-label="Move up">↑</button>
       <button class="icon" data-action="remove" data-id="${s.id}" aria-label="Remove">✕</button></li>`).join('')}</ol>
     ${card.shooters.length < S.MAX_SHOOTERS ? `<form class="addrow" data-form="add-shooter">
-      <input name="name" placeholder="Add shooter" list="names" autocomplete="off" enterkeyhint="done">
+      <input name="name" placeholder="Name (or pick a member)" list="memberlist" autocomplete="off">
+      <input name="memberNo" class="memno" placeholder="No." inputmode="numeric" autocomplete="off">
       <button class="btn">Add</button></form>
-      <datalist id="names">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
-      ${names.length ? `<div class="chips">${names.slice(0, 12).map((n) => `<button class="chip" data-action="quick-add" data-name="${esc(n)}">+ ${esc(n)}</button>`).join('')}</div>` : ''}` : ''}
-    <label class="check"><input type="checkbox" data-field="rotate" ${card.rotate ? 'checked' : ''}> Rotate first shooter each stand</label>
-
-    <h2>Stands <span class="muted">${S.targetCount(card)} targets</span></h2>
-    <div class="presets">
-      <button class="chip" data-action="preset" data-n="5" data-t="10">50 · 5×10</button>
-      <button class="chip" data-action="preset" data-n="10" data-t="10">100 · 10×10</button>
-      <button class="chip" data-action="preset" data-n="8" data-t="10">80 · 8×10</button>
-      <button class="chip" data-action="preset" data-n="10" data-t="8">80 · 10×8</button>
-    </div>
-    <div class="grid2">
-      <label>Stands<input type="number" min="1" max="30" data-stands="count" value="${card.stands.length}" inputmode="numeric"></label>
-      <label>Targets each<input type="number" min="1" max="30" data-stands="targets" value="${uniform ? card.stands[0]?.targets ?? 10 : ''}" placeholder="mixed" inputmode="numeric"></label>
-    </div>
-    <details><summary>Set targets per stand</summary>
-      <div class="perstand">${card.stands.map((s, i) => `<label>S${s.n}<input type="number" min="1" max="30" data-stand="${i}" value="${s.targets}" inputmode="numeric"></label>`).join('')}</div>
-    </details>
+      <datalist id="memberlist"></datalist>
+      ${recent.length ? `<p class="muted small">Recent</p><div class="chips">${recent.map((p) => `<button class="chip" data-action="quick-add" data-name="${esc(p.name)}" data-no="${esc(p.memberNo)}">+ ${esc(fmtPerson(p))}</button>`).join('')}</div>` : ''}` : ''}
+    <label class="check"><input type="checkbox" data-field="rotate" ${card.rotate ? 'checked' : ''}> Rotate: last shooter on a stand goes first on the next</label>
 
     <div class="actions">
       <button class="btn primary big" data-action="start" ${card.shooters.length ? '' : 'disabled'}>Start scoring →</button>
       <button class="btn danger" data-action="delete">Delete card</button>
     </div>
   </section>`;
+}
+
+/** Fill the member datalist and the "checked in today" panel on the setup screen. */
+async function loadSetupPeople(card) {
+  if (!clubEnabled() || !store.settings().pin) {
+    const p = document.getElementById('checkedin');
+    if (p) p.innerHTML = '<p class="muted small">Enter the club PIN in ⚙ Settings to pick from today\'s check-ins.</p>';
+    return;
+  }
+  fetchMembers().then((members) => {
+    const dl = document.getElementById('memberlist');
+    if (dl) dl.innerHTML = members.map((m) => `<option value="${esc(fmtPerson(m))}">`).join('');
+  }).catch(() => {});
+  const panel = document.getElementById('checkedin');
+  try {
+    const all = await fetchCheckins(card.date);
+    if (!document.body.contains(panel)) return;
+    const shoots = [...new Set(all.map((c) => c.shoot))];
+    const mine = card.shoot && shoots.includes(card.shoot) ? all.filter((c) => c.shoot === card.shoot) : all;
+    if (!all.length) { panel.innerHTML = `<p class="muted small">Nobody checked in for ${esc(S.formatDate(card.date))} yet. <a href="#/checkin">Check people in</a></p>`; return; }
+    const free = mine.filter((p) => !onCard(card, p));
+    panel.innerHTML = `<div class="panelhead"><b>Checked in${card.shoot && shoots.includes(card.shoot) ? ` · ${esc(card.shoot)}` : ' today'}</b>
+        <span class="muted small">${mine.length - free.length}/${mine.length} on this card</span>
+        ${free.length > 1 && card.shooters.length + free.length <= S.MAX_SHOOTERS ? '<button class="link" data-action="add-all">Add all</button>' : ''}</div>
+      <div class="chips">${mine.map((p) => {
+        const added = onCard(card, p);
+        return `<button class="chip ${added ? 'on' : ''}" ${added ? 'disabled' : ''} data-action="quick-add" data-name="${esc(p.name)}" data-no="${esc(p.memberNo)}" data-shoot="${esc(p.shoot)}">${added ? '✓' : '+'} ${esc(fmtPerson(p))}</button>`;
+      }).join('')}</div>
+      ${!card.shoot && shoots.length === 1 ? `<p class="muted small">Tip: adding someone sets the shoot to “${esc(shoots[0])}”.</p>` : ''}`;
+    panel._free = free;
+  } catch (e) {
+    if (document.body.contains(panel)) panel.innerHTML = `<p class="muted small">${esc(e.message)}${e.offline ? ': no signal and no saved check-in list.' : ''}</p>`;
+  }
 }
 
 function cellsHtml(card, sid, si) {
@@ -232,6 +273,124 @@ function viewSettings() {
   </section>`;
 }
 
+/* ---------- Check-in (club office) ---------- */
+
+const ci = { date: S.today(), shoot: '', q: '' };
+
+function viewCheckin() {
+  if (!clubEnabled()) return '<section class="pad"><h1>Check-in</h1><p class="note">Needs the club database. See SETUP.md.</p></section>';
+  ci.shoot ||= store.settings().ciShoot || '';
+  return `<section class="pad setup"><h1>Check-in</h1>
+    <div class="grid2">
+      <label>Date<input type="date" id="ci-date" value="${esc(ci.date)}"></label>
+      <label>Shoot<input id="ci-shoot" value="${esc(ci.shoot)}" list="ci-shoots" placeholder="e.g. Sunday 50"></label>
+    </div>
+    <datalist id="ci-shoots"></datalist>
+    <input id="ci-q" type="search" placeholder="Search name or number" value="${esc(ci.q)}" autocomplete="off">
+    <div id="ci-list"><p class="muted">Loading members…</p></div>
+    <h2>Guest</h2>
+    <form class="addrow" data-form="guest"><input name="name" placeholder="Guest name" autocomplete="off"><button class="btn">Check in</button></form>
+  </section>`;
+}
+
+let ciData = { members: [], checkins: [] };
+async function loadCheckin() {
+  const list = document.getElementById('ci-list');
+  try {
+    const [members, checkins] = await Promise.all([fetchMembers(), fetchCheckins(ci.date)]);
+    ciData = { members, checkins };
+    renderCheckinList();
+  } catch (e) { if (list) list.innerHTML = `<p class="note">${esc(e.message)}</p>`; }
+}
+
+function renderCheckinList() {
+  const list = document.getElementById('ci-list');
+  if (!list) return;
+  const dl = document.getElementById('ci-shoots');
+  const shoots = [...new Set([...ciData.checkins.map((c) => c.shoot), ...store.cards().map((c) => c.shoot).filter(Boolean)])];
+  if (dl) dl.innerHTML = shoots.map((x) => `<option value="${esc(x)}">`).join('');
+  const here = ciData.checkins.filter((c) => c.shoot === ci.shoot);
+  const isIn = (p) => here.some((c) => S.personKey(c) === S.personKey(p));
+  const q = ci.q.trim().toLowerCase();
+  const guests = here.filter((c) => !c.memberNo);
+  const rows = [...ciData.members, ...guests]
+    .filter((p) => !q || p.name.toLowerCase().includes(q) || (p.memberNo || '').includes(q))
+    .sort((a, b) => Number(isIn(b)) - Number(isIn(a)) || a.name.localeCompare(b.name));
+  list.innerHTML = !ci.shoot ? '<p class="note">Enter the shoot name first, so squads can find their shooters.</p>' : `
+    <p class="muted small"><b>${here.length}</b> checked in for ${esc(ci.shoot)} on ${esc(S.formatDate(ci.date))}</p>
+    <ul class="people">${rows.map((p) => `<li><button class="person ${isIn(p) ? 'in' : ''}" data-action="toggle-in" data-name="${esc(p.name)}" data-no="${esc(p.memberNo || '')}">
+      <span>${esc(p.name)}${p.memberNo ? '' : ' <small class="muted">guest</small>'}</span><span class="muted small">${esc(p.memberNo || '')}</span><b>${isIn(p) ? '✓ In' : 'Check in'}</b></button></li>`).join('') || '<li class="muted">No matches</li>'}</ul>`;
+}
+
+/* ---------- History ---------- */
+
+function viewHistory() {
+  return `<section class="pad"><h1>Score history</h1>
+    <label>Shooter<select id="h-person"><option value="">Loading…</option></select></label>
+    <div id="h-body"></div></section>`;
+}
+
+async function loadHistory(selected) {
+  const pick = document.getElementById('h-person');
+  let members = [];
+  if (clubEnabled() && store.settings().pin) { try { members = await fetchMembers(); } catch { /* phone data only */ } }
+  const ppl = S.people(store.cards(), members);
+  const me = store.settings().scorer.toLowerCase();
+  selected = selected ? decodeURIComponent(selected) : (ppl.find((p) => p.name.toLowerCase() === me) || ppl[0] || {}).key;
+  if (!pick) return;
+  pick.innerHTML = ppl.length ? ppl.map((p) => `<option value="${esc(p.key)}" ${p.key === selected ? 'selected' : ''}>${esc(fmtPerson(p))}</option>`).join('') : '<option value="">No shooters yet</option>';
+  pick.onchange = () => go(`#/history/${encodeURIComponent(pick.value)}`);
+  if (selected) showHistory(ppl.find((p) => p.key === selected));
+}
+
+async function showHistory(person) {
+  const body = document.getElementById('h-body');
+  if (!person || !body) return;
+  const local = S.personHistory(store.cards(), person.key);
+  const draw = (entries, note = '') => {
+    const st = S.historyStats(entries);
+    if (!st.shoots) { body.innerHTML = `<p class="muted">No scores yet for ${esc(person.name)}.</p>${note}`; return; }
+    const trend = st.trend === null ? '' : `<small class="${st.trend >= 0 ? 'up' : 'down'}">${st.trend >= 0 ? '▲' : '▼'} ${Math.abs(st.trend)}</small>`;
+    body.innerHTML = `
+      <div class="tiles">
+        <div><span>Average</span><b>${st.avgPct}%</b></div>
+        <div><span>Last 5</span><b>${st.last5Pct}%</b>${trend}</div>
+        <div><span>Best</span><b>${st.best.total}/${st.best.shot}</b><small>${esc(S.formatDate(st.best.date))}</small></div>
+        <div><span>Shoots</span><b>${st.shoots}</b><small>${st.kills}/${st.targets} targets</small></div>
+      </div>
+      ${chartSvg(entries.filter((e) => e.shot))}
+      <div class="scroll"><table class="board">
+        <thead><tr><th class="l">Date</th><th class="l">Shoot</th><th>Score</th><th>%</th></tr></thead>
+        <tbody>${entries.slice().reverse().map((e) => `<tr><td class="l">${esc(S.formatDate(e.date))}</td><td class="l">${esc(e.shoot || '')}${e.source === 'club' ? ' <small class="muted">club</small>' : ''}</td><td><b>${e.total}</b>/${e.shot}</td><td>${e.pct}</td></tr>`).join('')}</tbody>
+      </table></div>${note}`;
+  };
+  draw(local, clubEnabled() ? '<p class="muted small">Loading club scores…</p>' : '<p class="muted small">Scores from cards on this phone.</p>');
+  if (!clubEnabled() || !store.settings().pin) return;
+  try {
+    const remote = await fetchHistory(person);
+    draw(S.mergeHistory(local, remote), '<p class="muted small">Includes every card submitted to the club.</p>');
+  } catch (e) {
+    draw(local, `<p class="muted small">Club scores unavailable (${esc(e.message)}). Showing this phone only.</p>`);
+  }
+}
+
+/** Simple line chart of % per shoot. */
+function chartSvg(entries) {
+  if (entries.length < 2) return '';
+  const W = 340, H = 150, P = { l: 30, r: 10, t: 12, b: 22 };
+  const vals = entries.map((e) => e.pct);
+  const lo = Math.max(0, Math.floor((Math.min(...vals) - 5) / 10) * 10), hi = Math.min(100, Math.ceil((Math.max(...vals) + 5) / 10) * 10);
+  const x = (i) => P.l + (i * (W - P.l - P.r)) / (entries.length - 1);
+  const y = (v) => P.t + ((hi - v) * (H - P.t - P.b)) / (hi - lo || 1);
+  const pts = entries.map((e, i) => `${x(i).toFixed(1)},${y(e.pct).toFixed(1)}`).join(' ');
+  const grid = [lo, (lo + hi) / 2, hi].map((v) => `<line x1="${P.l}" x2="${W - P.r}" y1="${y(v)}" y2="${y(v)}" class="g"/><text x="${P.l - 4}" y="${y(v) + 4}" text-anchor="end">${v}</text>`).join('');
+  const first = entries[0].date, last = entries.at(-1).date;
+  return `<figure class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Score percentage over time">
+    ${grid}<polyline points="${pts}" class="l"/>${entries.map((e, i) => `<circle cx="${x(i)}" cy="${y(e.pct)}" r="3.5"><title>${esc(S.formatDate(e.date))}: ${e.total}/${e.shot} (${e.pct}%)</title></circle>`).join('')}
+    <text x="${P.l}" y="${H - 4}">${esc(S.formatDate(first))}</text><text x="${W - P.r}" y="${H - 4}" text-anchor="end">${esc(S.formatDate(last))}</text>
+  </svg><figcaption class="muted small">% of targets shot, per shoot</figcaption></figure>`;
+}
+
 /* ---------- Async loaders ---------- */
 
 async function loadShootSuggestions() {
@@ -296,16 +455,46 @@ $view.addEventListener('click', async (e) => {
 
   switch (a) {
     case 'new-card': {
-      const c = S.newCard({ scorer: store.settings().scorer });
+      const st = store.settings();
+      const l = S.LAYOUTS.find((x) => x.id === st.layout) || S.LAYOUTS[0];
+      const c = S.newCard({ scorer: st.scorer, stands: l.build(st.tenAt || 6), shoot: st.ciShoot && st.ciShootDate === S.today() ? st.ciShoot : '' });
       save(c); go(`#/setup/${c.id}`); break;
     }
     case 'demo': {
-      const c = S.newCard({ shoot: 'Example – delete me', ground: 'Practice ground', scorer: store.settings().scorer || 'You', shooters: ['Alex', 'Sam', 'Jo', 'Chris'], stands: S.makeStands(5, 10) });
-      c.shooters.forEach((s, k) => [0, 1, 2].forEach((i) => { S.restKilled(c, s.id, i); for (let t = 0; t <= k; t++) S.setMark(c, s.id, i, (t * 3 + i) % 10, 'O'); }));
+      const c = S.newCard({ shoot: 'Example – delete me', ground: 'Practice ground', scorer: store.settings().scorer || 'You', shooters: ['Alex', 'Sam', 'Jo', 'Chris'], stands: S.sixStandLayout(6) });
+      c.shooters.forEach((s, k) => [0, 1, 2].forEach((i) => { S.restKilled(c, s.id, i); for (let t = 0; t <= k; t++) S.setMark(c, s.id, i, (t * 3 + i) % 8, 'O'); }));
       save(c); go(`#/score/${c.id}/3`); break;
     }
     case 'flush': { const n = await flushQueue(); toast(n ? `Sent ${n} card(s)` : 'Still no signal'); render(); break; }
-    case 'quick-add': S.addShooter(card, el.dataset.name); save(card); render(); break;
+    case 'quick-add':
+      try {
+        S.addShooter(card, el.dataset.name, el.dataset.no || '');
+        if (el.dataset.shoot && !card.shoot) card.shoot = el.dataset.shoot;
+        save(card); render();
+      } catch (err) { toast(err.message); }
+      break;
+    case 'add-all': {
+      const free = document.getElementById('checkedin')?._free || [];
+      let n = 0;
+      for (const p of free) { try { S.addShooter(card, p.name, p.memberNo); n++; } catch { /* full or duplicate */ } }
+      if (!card.shoot && free[0]) card.shoot = free[0].shoot;
+      save(card); render(); toast(`Added ${n}`); break;
+    }
+    case 'layout': {
+      const l = S.LAYOUTS.find((x) => x.id === el.dataset.id);
+      const ok = !card.shooters.some((sh) => S.shooterTotals(card, sh.id).shot) || confirm('Change layout? Scores on stands that disappear will be lost.');
+      if (ok) { S.setStands(card, l.build(6)); store.saveSettings({ layout: l.id }); save(card); render(); }
+      break;
+    }
+    case 'tenat': S.setStands(card, S.sixStandLayout(+el.dataset.n)); store.saveSettings({ tenAt: +el.dataset.n }); save(card); render(); break;
+    case 'toggle-in': {
+      const p = { name: el.dataset.name, memberNo: el.dataset.no };
+      const on = !el.classList.contains('in');
+      el.disabled = true;
+      try { ciData.checkins = await setCheckin({ date: ci.date, shoot: ci.shoot, ...p }, on); renderCheckinList(); }
+      catch (err) { toast(err.offline ? 'No signal: check-in needs signal' : err.message); el.disabled = false; }
+      break;
+    }
     case 'remove': {
       const s = card.shooters.find((x) => x.id === el.dataset.id);
       if (S.shooterTotals(card, s.id).shot && !confirm(`Remove ${s.name} and their scores?`)) return;
@@ -344,14 +533,33 @@ $view.addEventListener('click', async (e) => {
   }
 });
 
-$view.addEventListener('submit', (e) => {
-  if (e.target.dataset.form !== 'add-shooter') return;
-  e.preventDefault();
-  const name = e.target.name.value.trim();
-  if (!name) return;
-  const card = currentCard();
-  try { S.addShooter(card, name); save(card); render(); document.querySelector('[data-form="add-shooter"] input')?.focus(); }
-  catch (err) { toast(err.message); }
+$view.addEventListener('submit', async (e) => {
+  const f = e.target;
+  if (f.dataset.form === 'add-shooter') {
+    e.preventDefault();
+    const p = parsePerson(f.name.value);
+    const memberNo = f.memberNo.value.trim() || p.memberNo;
+    if (!p.name) return;
+    const card = currentCard();
+    try { S.addShooter(card, p.name, memberNo); save(card); render(); document.querySelector('[data-form="add-shooter"] input')?.focus(); }
+    catch (err) { toast(err.message); }
+  } else if (f.dataset.form === 'guest') {
+    e.preventDefault();
+    const name = f.name.value.trim();
+    if (!name || !ci.shoot) return toast(ci.shoot ? 'Enter a name' : 'Enter the shoot name first');
+    try { ciData.checkins = await setCheckin({ date: ci.date, shoot: ci.shoot, name }, true); f.reset(); renderCheckinList(); toast(`${name} checked in`); }
+    catch (err) { toast(err.message); }
+  }
+});
+
+$view.addEventListener('input', (e) => {
+  const t = e.target;
+  if (t.id === 'ci-q') { ci.q = t.value; renderCheckinList(); }
+  // Picking "Name · 1042" from the member list fills in the number.
+  if (t.name === 'name' && t.form?.dataset.form === 'add-shooter') {
+    const p = parsePerson(t.value);
+    if (p.memberNo) { t.value = p.name; t.form.memberNo.value = p.memberNo; }
+  }
 });
 
 $view.addEventListener('change', async (e) => {
@@ -360,17 +568,25 @@ $view.addEventListener('change', async (e) => {
   if (t.dataset.field) {
     card[t.dataset.field] = t.type === 'checkbox' ? t.checked : t.value.trim();
     save(card);
+  } else if (t.id === 'ci-date' || t.id === 'ci-shoot') {
+    ci.date = document.getElementById('ci-date').value || S.today();
+    ci.shoot = document.getElementById('ci-shoot').value.trim();
+    store.saveSettings({ ciShoot: ci.shoot, ciShootDate: ci.date });
+    if (t.id === 'ci-date') loadCheckin(); else renderCheckinList();
+  } else if (t.dataset.memno) {
+    const s = card.shooters.find((x) => x.id === t.dataset.memno);
+    const v = t.value.trim();
+    if (v && card.shooters.some((x) => x !== s && x.memberNo === v)) { toast('That number is already on this card'); t.value = s.memberNo; return; }
+    s.memberNo = v; save(card);
   } else if (t.dataset.shooter) {
     const s = card.shooters.find((x) => x.id === t.dataset.shooter);
     if (t.value.trim()) { s.name = t.value.trim(); save(card); } else t.value = s.name;
   } else if (t.dataset.stands) {
     const n = Math.min(Math.max(parseInt(t.value, 10) || 1, 1), 30);
-    if (t.dataset.stands === 'count') {
-      const last = card.stands[card.stands.length - 1] || { targets: 10, pairs: true };
-      const next = card.stands.slice(0, n);
-      while (next.length < n) next.push({ ...last });
-      S.setStands(card, next);
-    } else S.setStands(card, card.stands.map((s) => ({ ...s, targets: n })));
+    const last = card.stands[card.stands.length - 1] || { targets: 10, pairs: true };
+    const next = card.stands.slice(0, n);
+    while (next.length < n) next.push({ ...last });
+    S.setStands(card, next);
     save(card); render();
   } else if (t.dataset.stand) {
     card.stands[+t.dataset.stand].targets = Math.min(Math.max(parseInt(t.value, 10) || 1, 1), 30);

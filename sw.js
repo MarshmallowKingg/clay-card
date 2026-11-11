@@ -1,6 +1,6 @@
 // Offline support: cache the app shell, serve it cache-first, refresh in the background.
 // Bump VERSION whenever you deploy changes so phones pick them up.
-const VERSION = 'claycard-v1';
+const VERSION = 'claycard-v2';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'src/app.js', 'src/scoring.js', 'src/storage.js', 'src/api.js', 'src/config.js',
