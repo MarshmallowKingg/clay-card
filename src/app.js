@@ -615,4 +615,13 @@ applyTheme();
 render();
 window.addEventListener('online', () => flushQueue().then((n) => { if (n) { toast(`Sent ${n} waiting card(s) ✓`); render(); } }));
 flushQueue().then((n) => { if (n) { toast(`Sent ${n} waiting card(s) ✓`); render(); } });
-if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  // When a new version takes over, reload once so the phone runs it straight away.
+  // Safe mid-shoot: every tap is already saved and the URL keeps your place.
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController && !reloaded) { reloaded = true; location.reload(); }
+  });
+  navigator.serviceWorker.register('sw.js').then((reg) => reg.update()).catch(() => {});
+}
